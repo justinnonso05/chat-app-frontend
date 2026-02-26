@@ -1,65 +1,105 @@
-import Image from "next/image";
+"use client";
+
+import React, { useState } from "react";
+import { useRouter } from "next/navigation";
+import { API_ENDPOINTS } from "@/lib/api-endpoints";
 
 export default function Home() {
+  const router = useRouter();
+  const [displayName, setDisplayName] = useState("");
+  const [roomId, setRoomId] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleJoinOrCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!displayName.trim()) return;
+    setError("");
+    setLoading(true);
+
+    // Save anonymous display name & create UUID for this session
+    localStorage.setItem("displayName", displayName.trim());
+    if (!localStorage.getItem("deviceId")) {
+      localStorage.setItem("deviceId", crypto.randomUUID());
+    }
+
+    const roomToJoin = roomId.trim() ? roomId.trim().toUpperCase() : Math.random().toString(36).substring(2, 8).toUpperCase();
+
+    // If attempting to join an existing room, check if it's full FIRST
+    if (roomId.trim()) {
+      try {
+        const res = await fetch(API_ENDPOINTS.signaling.roomStatus(roomToJoin));
+        if (res.ok) {
+          const data = await res.json();
+          if (data.is_full) {
+            setError(`Room ${roomToJoin} is full (3/3). Please create a new one.`);
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("Status fetch failed - continuing natively", err);
+        // If the fetch fails because backend isn't up, just let the WebSocket timeout handle it gracefully
+      }
+    }
+
+    router.push(`/chat/${roomToJoin}`);
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen w-full flex items-center justify-center bg-background p-4 flex-col">
+      <div className="w-full max-w-md bg-panel-bg border border-panel-border rounded-2xl shadow-sm p-8 flex flex-col items-center z-10">
+
+        <div className="w-16 h-16 bg-primary/10 text-primary rounded-2xl flex items-center justify-center mb-6 shadow-sm">
+          <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+
+        <h1 className="text-2xl font-bold text-foreground mb-2 text-center">Local File Share & Chat</h1>
+        <p className="text-sm text-text-muted mb-6 text-center px-4">Zero-download, completely anonymous transfer hub over your local Wi-Fi router.</p>
+
+        {error && (
+          <div className="w-full p-4 mb-6 bg-error/10 border border-error/20 rounded-xl text-center">
+            <p className="text-sm text-error font-medium">{error}</p>
+          </div>
+        )}
+
+        <form className="w-full space-y-4" onSubmit={handleJoinOrCreate}>
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-foreground">Display Name (Visible to peers)</label>
+            <input
+              type="text"
+              required
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="E.g., MacBook Pro"
+              className="w-full bg-secondary border border-transparent focus:border-primary focus:bg-background rounded-xl px-4 py-3 text-sm text-foreground outline-none transition-all"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+          </div>
+
+          <div className="space-y-1 pt-2">
+            <label className="text-sm font-medium text-foreground">Room ID (Optional)</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={roomId}
+                onChange={(e) => setRoomId(e.target.value.toUpperCase())}
+                placeholder="Leave blank to create a new room"
+                className="w-full bg-secondary border border-transparent focus:border-primary focus:bg-background rounded-xl px-4 py-3 text-sm text-foreground outline-none transition-all uppercase"
+              />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-medium rounded-xl px-4 py-3 mt-6 transition-colors shadow-sm flex justify-center items-center gap-2 disabled:opacity-75"
           >
-            Documentation
-          </a>
-        </div>
-      </main>
+            {loading ? "Connecting..." : (roomId.trim() ? "Join Room" : "Create New Room")}
+            {!loading && <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>}
+          </button>
+        </form>
+
+      </div>
     </div>
   );
 }

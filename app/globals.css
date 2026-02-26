@@ -1,26 +1,86 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f8f9fa;
+  --foreground: #111827;
+
+  --panel-bg: #ffffff;
+  --panel-border: #e5e7eb;
+
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+
+  --secondary: #f3f4f6;
+  --secondary-foreground: #1f2937;
+
+  --accent: #eff6ff;
+  --accent-foreground: #1d4ed8;
+
+  --success: #10b981;
+  --success-foreground: #ffffff;
+  --error: #ef4444;
+  --error-foreground: #ffffff;
+
+  --text-muted: #6b7280;
+  
+  --radius: 1rem;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-panel-bg: var(--panel-bg);
+  --color-panel-border: var(--panel-border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-error: var(--error);
+  --color-error-foreground: var(--error-foreground);
+  --color-text-muted: var(--text-muted);
+  --radius-custom: var(--radius);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* 
+  I have changed this from "@media (prefers-color-scheme: dark)" to ".dark"
+  Now it will NEVER trigger dark mode automatically. It will only 
+  trigger if you specifically add the class "dark" to your HTML tag.
+*/
+.dark {
+  --background: #09090b;
+  --foreground: #f8fafc;
+
+  --panel-bg: #18181b;
+  --panel-border: #27272a;
+
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+
+  --secondary: #27272a;
+  --secondary-foreground: #e4e4e7;
+
+  --accent: #1e1e24;
+  --accent-foreground: #60a5fa;
+
+  --success: #059669;
+  --success-foreground: #ffffff;
+  --error: #dc2626;
+  --error-foreground: #ffffff;
+
+  --text-muted: #9ca3af;
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 200ms;
 }
