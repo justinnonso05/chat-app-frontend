@@ -8,7 +8,6 @@ const ICE_SERVERS = {
     { urls: "stun:stun2.l.google.com:19302" },
     { urls: "stun:stun3.l.google.com:19302" },
     { urls: "stun:stun4.l.google.com:19302" },
-    // Free TURN relay fallback — kicks in when direct P2P is blocked by NAT/firewall
     {
       urls: "turn:openrelay.metered.ca:80",
       username: "openrelayproject",
@@ -27,7 +26,6 @@ const ICE_SERVERS = {
   ],
 };
 
-
 export type MessageInfo = {
   senderId: string;
   senderName: string;
@@ -41,7 +39,12 @@ export type PeerInfo = {
   isConnected: boolean;
 };
 
-export function useWebRTC(roomId: string, deviceId: string, displayName: string) {
+export function useWebRTC(
+  roomId: string,
+  deviceId: string,
+  displayName: string,
+  onBinaryMessage?: (data: ArrayBuffer, peerId: string, peerName: string) => void
+) {
   const [messages, setMessages] = useState<MessageInfo[]>([]);
   const [peers, setPeers] = useState<PeerInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -49,10 +52,15 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
   const wsRef = useRef<WebSocket | null>(null);
   const pcRef = useRef<{ [peerId: string]: RTCPeerConnection }>({});
   const channelRef = useRef<{ [peerId: string]: RTCDataChannel }>({});
+  const onBinaryMessageRef = useRef(onBinaryMessage);
+  onBinaryMessageRef.current = onBinaryMessage;
 
   // Track remote description status to prevent ICE candidate race conditions
   const isRemoteDescSet = useRef<{ [peerId: string]: boolean }>({});
   const pendingCandidates = useRef<{ [peerId: string]: RTCIceCandidateInit[] }>({});
+
+  // Track peer names for binary message attribution
+  const peerNames = useRef<{ [peerId: string]: string }>({});
 
   // Initialize saved messages and save room to local storage
   useEffect(() => {
@@ -61,11 +69,9 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
       if (!savedRooms[roomId]) {
         savedRooms[roomId] = { roomId, name: roomId, messages: [], lastAccessed: Date.now() };
       }
-
       if (savedRooms[roomId].messages && savedRooms[roomId].messages.length > 0) {
         setMessages(savedRooms[roomId].messages);
       }
-
       savedRooms[roomId].lastAccessed = Date.now();
       localStorage.setItem('savedRooms', JSON.stringify(savedRooms));
     }
@@ -78,6 +84,7 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
   };
 
   const updatePeerStatus = (peerId: string, peerName: string, isConnected: boolean) => {
+    peerNames.current[peerId] = peerName;
     setPeers(prev => {
       const exists = prev.find(p => p.id === peerId);
       if (exists) {
@@ -87,18 +94,6 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
     });
   };
 
-  const removePeer = (peerId: string) => {
-    setPeers(prev => prev.filter(p => p.id !== peerId));
-    if (pcRef.current[peerId]) {
-      pcRef.current[peerId].close();
-      delete pcRef.current[peerId];
-    }
-    if (channelRef.current[peerId]) {
-      delete channelRef.current[peerId];
-    }
-  };
-
-  // Helper to persist new messages
   const persistMessage = (msgData: MessageInfo) => {
     setMessages((prev) => {
       const newMessages = [...prev, msgData];
@@ -114,16 +109,24 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
     });
   };
 
-  const handleReceiveMessage = (event: MessageEvent, peerId: string, peerName: string) => {
-    try {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'chat') {
-        updatePeerStatus(peerId, peerName, true);
-        persistMessage(msg.data);
+  const setupChannel = (channel: RTCDataChannel, peerId: string, peerName: string) => {
+    channel.binaryType = 'arraybuffer';
+
+    channel.onmessage = (e) => {
+      if (e.data instanceof ArrayBuffer) {
+        onBinaryMessageRef.current?.(e.data, peerId, peerNames.current[peerId] ?? peerName);
+      } else {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'chat') {
+            updatePeerStatus(peerId, peerName, true);
+            persistMessage(msg.data);
+          }
+        } catch {
+          console.warn('Received non-JSON text data', e.data);
+        }
       }
-    } catch (e) {
-      console.warn("Received non-JSON data from data channel", event.data);
-    }
+    };
   };
 
   const flushPendingCandidates = async (peerId: string, pc: RTCPeerConnection) => {
@@ -164,7 +167,7 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
     };
 
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+      if (['disconnected', 'failed', 'closed'].includes(pc.iceConnectionState)) {
         updatePeerStatus(peerId, peerName, false);
       } else if (pc.iceConnectionState === 'connected') {
         updatePeerStatus(peerId, peerName, true);
@@ -174,23 +177,20 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
     if (isInitiator) {
       const channel = pc.createDataChannel('chat');
       channelRef.current[peerId] = channel;
-
       channel.onopen = () => updatePeerStatus(peerId, peerName, true);
       channel.onclose = () => updatePeerStatus(peerId, peerName, false);
-      channel.onmessage = (e) => handleReceiveMessage(e, peerId, peerName);
+      setupChannel(channel, peerId, peerName);
     } else {
       pc.ondatachannel = (event) => {
         const channel = event.channel;
         channelRef.current[peerId] = channel;
-
         if (channel.readyState === 'open') {
           updatePeerStatus(peerId, peerName, true);
         } else {
           channel.onopen = () => updatePeerStatus(peerId, peerName, true);
         }
-
         channel.onclose = () => updatePeerStatus(peerId, peerName, false);
-        channel.onmessage = (e) => handleReceiveMessage(e, peerId, peerName);
+        setupChannel(channel, peerId, peerName);
       };
     }
 
@@ -204,7 +204,6 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log('Connected to signaling server');
       sendSignaling({ type: 'join', senderId: deviceId, senderName: displayName });
     };
 
@@ -215,7 +214,6 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
         const pc = createPeerConnection(data.senderId, data.senderName, true);
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-
         sendSignaling({
           type: 'offer',
           offer: pc.localDescription,
@@ -231,12 +229,9 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
         const pc = createPeerConnection(data.senderId, data.senderName, false);
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
         isRemoteDescSet.current[data.senderId] = true;
-
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-
         await flushPendingCandidates(data.senderId, pc);
-
         sendSignaling({
           type: 'answer',
           answer: pc.localDescription,
@@ -265,7 +260,6 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
               console.error('Error adding received ice candidate', e);
             }
           } else {
-            // Queue pending candidates until remote description is set
             if (!pendingCandidates.current[data.senderId]) {
               pendingCandidates.current[data.senderId] = [];
             }
@@ -273,23 +267,15 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
           }
         }
       }
-
-      if (data.type === 'peer_left') {
-        // We handle dropouts mostly via ICE states, but a dedicated message helps cleanup
-      }
     };
 
     ws.onclose = (event) => {
-      if (event.code === 1008) {
-        setError(event.reason);
-      }
-    }
+      if (event.code === 1008) setError(event.reason);
+    };
 
     return () => {
       ws?.close();
-      Object.keys(pcRef.current).forEach(id => {
-        pcRef.current[id].close();
-      });
+      Object.keys(pcRef.current).forEach(id => pcRef.current[id].close());
       pcRef.current = {};
       channelRef.current = {};
       setPeers([]);
@@ -301,11 +287,9 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
       senderId: deviceId,
       senderName: displayName,
       text,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     };
-
     persistMessage(msgData);
-
     Object.values(channelRef.current).forEach(channel => {
       if (channel.readyState === 'open') {
         channel.send(JSON.stringify({ type: 'chat', data: msgData }));
@@ -321,5 +305,7 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
     peers,
     isConnected,
     error,
+    channelRef,
+    pcRef,
   };
 }

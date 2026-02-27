@@ -1,11 +1,14 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { useWebRTC } from '@/hooks/useWebRTC';
+import { useFileTransfer, type FileTransferState } from '@/hooks/useFileTransfer';
+import { FileDropZone } from '@/components/FileDropZone';
+import { FileMessage } from '@/components/FileMessage';
 
-// --- Icon helpers (inline SVG to avoid extra deps) ---
+// --- Icon helpers ---
 const Icon = {
   menu: <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="18" x2="21" y2="18" /></svg>,
   close: <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>,
@@ -15,14 +18,11 @@ const Icon = {
   send: <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>,
   copy: <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>,
   network: <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="5" r="3" /><circle cx="5" cy="19" r="3" /><circle cx="19" cy="19" r="3" /><path d="M12 8v5m-4.2 3.2L12 13m4.2 3.2L12 13" /></svg>,
+  attach: <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>,
 };
 
-// Deterministic color per initial for peer avatars
 const avatarColors: Record<string, string> = {};
-const palette = [
-  "bg-blue-500", "bg-violet-500", "bg-rose-500", "bg-amber-500",
-  "bg-emerald-500", "bg-sky-500", "bg-pink-500", "bg-indigo-500",
-];
+const palette = ["bg-blue-500","bg-violet-500","bg-rose-500","bg-amber-500","bg-emerald-500","bg-sky-500","bg-pink-500","bg-indigo-500"];
 function avatarColor(name: string): string {
   if (!avatarColors[name]) {
     let h = 0;
@@ -32,7 +32,6 @@ function avatarColor(name: string): string {
   return avatarColors[name];
 }
 
-// Header height shared across all three columns
 const HEADER_H = "h-[64px]";
 
 export default function ChatDashboard() {
@@ -46,11 +45,12 @@ export default function ChatDashboard() {
   const [savedRooms, setSavedRooms] = useState<{ roomId: string }[]>([]);
   const [copied, setCopied] = useState(false);
   const [isDark, setIsDark] = useState(false);
-
-  const bottomRef = useRef<HTMLDivElement>(null);
   const [showLeft, setShowLeft] = useState(false);
   const [showRight, setShowRight] = useState(false);
   const [roomRole, setRoomRole] = useState<"host" | "member">("member");
+
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const name = localStorage.getItem("displayName");
@@ -74,11 +74,33 @@ export default function ChatDashboard() {
     return () => obs.disconnect();
   }, [router, roomId]);
 
-  const { messages, sendMessage, peers, isConnected, error } = useWebRTC(roomId, deviceId, displayName);
+  // useFileTransfer needs to be declared before useWebRTC so handleBinaryMessage ref is stable
+  const onFileReceived = useCallback((_transfer: FileTransferState) => {}, []);
+
+  // Temporary stable ref so we can pass it to useWebRTC before useFileTransfer is called
+  const binaryHandlerRef = useRef<(data: ArrayBuffer, peerId: string, peerName: string) => void>(() => {});
+
+  const { messages, sendMessage, peers, isConnected, error, channelRef } = useWebRTC(
+    roomId, deviceId, displayName,
+    (data, peerId, peerName) => binaryHandlerRef.current(data, peerId, peerName)
+  );
+
+  const { transfers, sendFile, handleBinaryMessage, clearTransfer } = useFileTransfer(
+    channelRef, deviceId, displayName, onFileReceived
+  );
+
+  // Wire the real handler after both hooks are initialized
+  binaryHandlerRef.current = handleBinaryMessage;
+
+  const handleFiles = useCallback((files: File[]) => {
+    files.forEach(f => sendFile(f));
+  }, [sendFile]);
+
+  const activeTransfers = transfers.filter(t => !t.done);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, transfers]);
 
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,32 +113,25 @@ export default function ChatDashboard() {
     setTimeout(() => setCopied(false), 1500);
   };
 
-  // Sidebar shared column classes
   const sidebarBase =
     "absolute inset-y-0 z-30 flex flex-col border-r border-[var(--panel-border)] w-72 xl:w-64 transition-transform duration-300 ease-in-out xl:relative xl:translate-x-0 xl:z-0 h-full";
 
   return (
     <div className="h-[100dvh] w-full flex overflow-hidden text-foreground relative">
 
-      {/* Fixed wallpaper layer — immune to layout shifts, keyboard & sidebar */}
+      {/* Fixed wallpaper layer */}
       <div
         aria-hidden="true"
         style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: -1,
+          position: "fixed", inset: 0, zIndex: -1,
           backgroundImage: `url(/${isDark ? "dark" : "light"}.jpg)`,
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-          backgroundRepeat: "no-repeat",
-          // Strong dim so text is always readable
-          filter: "brightness(0.9)",
+          backgroundSize: "cover", backgroundPosition: "center",
+          backgroundRepeat: "no-repeat", filter: "brightness(0.9)",
         }}
       />
-      {/* Extra overlay to further dim / tint wallpaper */}
       <div aria-hidden="true" className="fixed inset-0 z-0 pointer-events-none bg-background/88 dark:bg-background/90" />
 
-      {/* Mobile overlay tap-away */}
+      {/* Mobile tap-away */}
       {(showLeft || showRight) && (
         <div
           className="xl:hidden absolute inset-0 z-20 bg-black/40"
@@ -124,12 +139,11 @@ export default function ChatDashboard() {
         />
       )}
 
-      {/* ── LEFT SIDEBAR — fully opaque, no blur ── */}
+      {/* ── LEFT SIDEBAR ── */}
       <aside
         className={`${sidebarBase} left-0 ${showLeft ? "translate-x-0" : "-translate-x-full"}`}
         style={{ backgroundColor: isDark ? "#18181b" : "#ffffff", backdropFilter: "none", WebkitBackdropFilter: "none" }}
       >
-        {/* Header */}
         <div className={`${HEADER_H} flex items-center justify-between px-5 border-b border-[var(--glass-border)] shrink-0`}>
           <div className="flex items-center gap-3 min-w-0">
             <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-semibold shrink-0 ${avatarColor(displayName)}`}>
@@ -145,7 +159,6 @@ export default function ChatDashboard() {
           </button>
         </div>
 
-        {/* Create / Join */}
         <div className="px-4 py-3 border-b border-[var(--glass-border)] shrink-0">
           <button
             onClick={() => router.push("/")}
@@ -155,7 +168,6 @@ export default function ChatDashboard() {
           </button>
         </div>
 
-        {/* Saved rooms */}
         <div className="flex-1 overflow-y-auto thin-scrollbar px-3 py-3 space-y-1">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-text-muted px-2 pb-2">Saved Networks</p>
           {savedRooms.map(r => (
@@ -180,19 +192,21 @@ export default function ChatDashboard() {
           )}
         </div>
 
-        {/* Footer */}
-        <div className={`px-4 py-3 border-t border-[var(--glass-border)] shrink-0`}>
+        <div className="px-4 py-3 border-t border-[var(--glass-border)] shrink-0">
           <ThemeToggle />
         </div>
       </aside>
 
-      {/* ── MAIN CHAT — grid keeps header/input pinned regardless of keyboard ── */}
+      {/* ── MAIN CHAT ── */}
       <main
         className="flex-1 min-w-0 relative z-10"
-        style={{ display: "grid", gridTemplateRows: "auto 1fr auto", height: "100dvh" }}
+        style={{ display: "grid", gridTemplateRows: "auto 1fr auto auto", height: "100dvh" }}
       >
-        <div className={`${HEADER_H} shrink-0 border-b border-white/10 dark:border-white/5 flex items-center justify-between px-4 gap-3 relative z-10`} style={{ background: 'var(--chat-header-glass)', backdropFilter: 'blur(40px)', WebkitBackdropFilter: 'blur(40px)' }}>
-          {/* Left actions */}
+        {/* Header */}
+        <div
+          className={`${HEADER_H} shrink-0 border-b border-white/10 dark:border-white/5 flex items-center justify-between px-4 gap-3 relative z-10`}
+          style={{ background: "var(--chat-header-glass)", backdropFilter: "blur(40px)", WebkitBackdropFilter: "blur(40px)" }}
+        >
           <div className="flex items-center gap-2 min-w-0">
             <button onClick={() => setShowLeft(true)} className="xl:hidden text-text-muted hover:text-foreground p-2 rounded-xl hover:bg-secondary transition-colors shrink-0">
               {Icon.menu}
@@ -208,7 +222,6 @@ export default function ChatDashboard() {
               </p>
             </div>
           </div>
-          {/* Right actions */}
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => router.push("/")}
@@ -223,61 +236,110 @@ export default function ChatDashboard() {
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto no-scrollbar px-4 md:px-8 py-6 space-y-3 relative z-10">
-          <div className="flex justify-center mb-4">
-            <span className="text-[11px] px-3 py-1 rounded-full glass border border-[var(--glass-border)] text-text-muted">
-              End-to-End Encrypted · Saved locally
-            </span>
-          </div>
-
-          {error && (
-            <div className="flex justify-center">
-              <span className="text-[12px] px-4 py-1.5 rounded-full bg-error/10 border border-error/20 text-error">{error}</span>
+        <FileDropZone onFiles={handleFiles} disabled={!isConnected}>
+          <div className="overflow-y-auto no-scrollbar px-4 md:px-8 py-6 space-y-3 relative z-10 h-full">
+            <div className="flex justify-center mb-4">
+              <span className="text-[11px] px-3 py-1 rounded-full glass border border-[var(--glass-border)] text-text-muted">
+                End-to-End Encrypted · Saved locally
+              </span>
             </div>
-          )}
 
-          {messages.map((msg, i) => {
-            const isMe = msg.senderId === deviceId;
-            const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-            return isMe ? (
-              <div key={i} className="flex justify-end">
-                <div className="max-w-[75%] sm:max-w-[60%]">
-                  <div className="flex items-center justify-end gap-1.5 mb-1 pr-1">
-                    <span className="text-[10px] text-text-muted">{time}</span>
-                  </div>
-                  <div className="bg-primary text-white px-4 py-2.5 rounded-2xl rounded-br-md text-sm leading-relaxed shadow-sm">
-                    {msg.text}
-                  </div>
-                </div>
+            {error && (
+              <div className="flex justify-center">
+                <span className="text-[12px] px-4 py-1.5 rounded-full bg-error/10 border border-error/20 text-error">{error}</span>
               </div>
-            ) : (
-              <div key={i} className="flex items-end gap-2 max-w-[75%] sm:max-w-[60%]">
-                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0 ${avatarColor(msg.senderName)}`}>
-                  {msg.senderName.charAt(0).toUpperCase()}
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5 mb-1 pl-1">
-                    <span className="text-[11px] font-semibold text-foreground">{msg.senderName}</span>
-                    <span className="text-[10px] text-text-muted">{time}</span>
+            )}
+
+            {messages.map((msg, i) => {
+              const isMe = msg.senderId === deviceId;
+              const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+              return isMe ? (
+                <div key={i} className="flex justify-end">
+                  <div className="max-w-[75%] sm:max-w-[60%]">
+                    <div className="flex items-center justify-end gap-1.5 mb-1 pr-1">
+                      <span className="text-[10px] text-text-muted">{time}</span>
+                    </div>
+                    <div className="bg-primary text-white px-4 py-2.5 rounded-2xl rounded-br-md text-sm leading-relaxed shadow-sm">
+                      {msg.text}
+                    </div>
                   </div>
-                  <div className="px-4 py-2.5 rounded-2xl rounded-bl-md text-sm leading-relaxed text-foreground border border-white/20 dark:border-white/8" style={{ background: 'var(--bubble-glass)', backdropFilter: 'blur(32px)', WebkitBackdropFilter: 'blur(32px)', boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
-                    {msg.text}
+                </div>
+              ) : (
+                <div key={i} className="flex items-end gap-2 max-w-[75%] sm:max-w-[60%]">
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0 ${avatarColor(msg.senderName)}`}>
+                    {msg.senderName.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5 mb-1 pl-1">
+                      <span className="text-[11px] font-semibold text-foreground">{msg.senderName}</span>
+                      <span className="text-[10px] text-text-muted">{time}</span>
+                    </div>
+                    <div className="px-4 py-2.5 rounded-2xl rounded-bl-md text-sm leading-relaxed text-foreground border border-white/20 dark:border-white/8"
+                      style={{ background: "var(--bubble-glass)", backdropFilter: "blur(32px)", WebkitBackdropFilter: "blur(32px)", boxShadow: "0 2px 12px rgba(0,0,0,0.08)" }}
+                    >
+                      {msg.text}
+                    </div>
                   </div>
                 </div>
+              );
+            })}
+
+            {/* File transfer messages */}
+            {transfers.map(t => (
+              <FileMessage key={t.fileId} transfer={t} isMe={t.direction === "sending"} onDismiss={clearTransfer} />
+            ))}
+
+            <div ref={bottomRef} />
+          </div>
+        </FileDropZone>
+
+        {/* Active transfer progress strip */}
+        {activeTransfers.length > 0 && (
+          <div className="px-4 md:px-8 py-2 relative z-10 border-t border-white/5"
+            style={{ background: "var(--chat-header-glass)", backdropFilter: "blur(20px)" }}
+          >
+            {activeTransfers.map(t => (
+              <div key={t.fileId} className="flex items-center gap-3 py-0.5">
+                <span className="text-[11px] text-text-muted shrink-0 max-w-[140px] truncate">{t.fileName}</span>
+                <div className="flex-1 h-1 bg-secondary rounded-full overflow-hidden">
+                  <div className="h-full bg-primary rounded-full transition-all duration-150" style={{ width: `${Math.round(t.progress * 100)}%` }} />
+                </div>
+                <span className="text-[10px] text-text-muted shrink-0">
+                  {Math.round(t.progress * 100)}%
+                  {t.speedBps > 0 && ` · ${t.speedBps >= 1048576 ? `${(t.speedBps / 1048576).toFixed(1)} MB/s` : `${(t.speedBps / 1024).toFixed(0)} KB/s`}`}
+                </span>
               </div>
-            );
-          })}
-          <div ref={bottomRef} />
-        </div>
+            ))}
+          </div>
+        )}
 
         {/* Input */}
-        <div className="shrink-0 px-4 md:px-8 py-4 border-t border-white/10 dark:border-white/5 relative z-10" style={{ background: 'var(--chat-header-glass)', backdropFilter: 'blur(40px)', WebkitBackdropFilter: 'blur(40px)' }}>
-          <form onSubmit={handleSend} className="flex items-center gap-3 max-w-4xl mx-auto">
-            <div className="flex-1 flex items-center gap-2 bg-secondary/70 border border-[var(--glass-border)] rounded-2xl px-4 py-2.5 focus-within:border-primary/40 focus-within:ring-3 focus-within:ring-primary/10 transition-all">
+        <div
+          className="shrink-0 px-4 md:px-8 py-4 border-t border-white/10 dark:border-white/5 relative z-10"
+          style={{ background: "var(--chat-header-glass)", backdropFilter: "blur(40px)", WebkitBackdropFilter: "blur(40px)" }}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={e => { if (e.target.files) handleFiles(Array.from(e.target.files)); e.target.value = ""; }}
+          />
+          <form onSubmit={handleSend} className="flex items-center gap-2 max-w-4xl mx-auto">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!isConnected}
+              className="w-10 h-10 flex items-center justify-center rounded-xl text-text-muted hover:text-foreground hover:bg-secondary disabled:opacity-40 disabled:pointer-events-none transition-colors shrink-0"
+              title="Send file"
+            >
+              {Icon.attach}
+            </button>
+            <div className="flex-1 flex items-center gap-2 bg-secondary/70 border border-[var(--glass-border)] rounded-2xl px-4 py-2.5 focus-within:border-primary/40 transition-all">
               <input
                 type="text"
                 value={text}
-                onChange={(e) => setText(e.target.value)}
+                onChange={e => setText(e.target.value)}
                 placeholder={isConnected ? "Message..." : peers.length > 0 ? "Connecting..." : "Waiting for peer..."}
                 className="flex-1 bg-transparent border-none focus:outline-none text-sm text-foreground placeholder:text-text-muted"
               />
@@ -293,12 +355,11 @@ export default function ChatDashboard() {
         </div>
       </main>
 
-      {/* ── RIGHT SIDEBAR — fully opaque, no blur ── */}
+      {/* ── RIGHT SIDEBAR ── */}
       <aside
         className={`${sidebarBase.replace("border-r", "border-l")} right-0 left-auto ${showRight ? "translate-x-0" : "translate-x-full"}`}
         style={{ backgroundColor: isDark ? "#18181b" : "#ffffff", backdropFilter: "none", WebkitBackdropFilter: "none" }}
       >
-        {/* Header */}
         <div className={`${HEADER_H} flex items-center justify-between px-5 border-b border-[var(--glass-border)] shrink-0`}>
           <p className="font-semibold text-sm">Network Setup</p>
           <button onClick={() => setShowRight(false)} className="xl:hidden text-text-muted hover:text-foreground p-1.5 rounded-lg transition-colors">
@@ -306,7 +367,6 @@ export default function ChatDashboard() {
           </button>
         </div>
 
-        {/* Content */}
         <div className="flex-1 overflow-y-auto thin-scrollbar px-4 py-5 space-y-6">
           {/* Access Key */}
           <section>
@@ -329,19 +389,15 @@ export default function ChatDashboard() {
               <span className="text-[10px] font-bold bg-primary/10 text-primary px-2 py-0.5 rounded-full border border-primary/15">{peers.length + 1} / 3</span>
             </div>
             <div className="space-y-1">
-              {/* Self */}
               <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-primary/6 border border-primary/10">
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0 ${avatarColor(displayName)}`}>
                   {displayName.charAt(0).toUpperCase()}
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{displayName}</p>
-                  <p className="text-[10px] text-text-muted">
-                    {roomRole === "host" ? "You · Host" : "You · Member"}
-                  </p>
+                  <p className="text-[10px] text-text-muted">{roomRole === "host" ? "You · Host" : "You · Member"}</p>
                 </div>
               </div>
-              {/* Peers */}
               {peers.map(peer => (
                 <div key={peer.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-secondary transition-colors">
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0 ${avatarColor(peer.name)} ${!peer.isConnected && "opacity-50"}`}>
@@ -378,7 +434,7 @@ export default function ChatDashboard() {
             onClick={() => router.push("/")}
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-error text-sm font-medium border border-error/15 hover:bg-error/8 transition-colors"
           >
-            {Icon.logout} Disconnect & Leave
+            {Icon.logout} Disconnect &amp; Leave
           </button>
         </div>
       </aside>
