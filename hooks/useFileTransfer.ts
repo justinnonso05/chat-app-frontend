@@ -18,14 +18,14 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
-async function saveReceivedFile(fileId: string, blob: Blob, meta: {
+async function saveReceivedFile(fileId: string, roomId: string, blob: Blob, meta: {
   fileName: string; fileType: string; fileSize: number; senderName: string;
 }) {
   try {
     const db = await openDB();
     await new Promise<void>((res, rej) => {
       const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put({ fileId, blob, savedAt: Date.now(), ...meta });
+      tx.objectStore(STORE).put({ fileId, roomId, blob, savedAt: Date.now(), ...meta });
       tx.oncomplete = () => res();
       tx.onerror = () => rej(tx.error);
     });
@@ -34,18 +34,20 @@ async function saveReceivedFile(fileId: string, blob: Blob, meta: {
   }
 }
 
-async function loadReceivedFiles(): Promise<Array<{
+async function loadReceivedFiles(roomId: string): Promise<Array<{
   fileId: string; blob: Blob; fileName: string; fileType: string;
   fileSize: number; senderName: string; savedAt: number;
 }>> {
   try {
     const db = await openDB();
-    return new Promise((res, rej) => {
+    const all = await new Promise<any[]>((res, rej) => {
       const tx = db.transaction(STORE, 'readonly');
       const req = tx.objectStore(STORE).getAll();
       req.onsuccess = () => res(req.result ?? []);
       req.onerror = () => rej(req.error);
     });
+    // Only return files belonging to this room
+    return all.filter(f => f.roomId === roomId);
   } catch {
     return [];
   }
@@ -198,7 +200,7 @@ export function useFileTransfer(
     });
 
     // Received blobs from IndexedDB
-    loadReceivedFiles().then(files => {
+    loadReceivedFiles(roomId).then(files => {
       const received: FileTransferState[] = files.map(f => {
         const url = URL.createObjectURL(f.blob);
         blobUrlsRef.current[f.fileId] = url;
@@ -284,8 +286,8 @@ export function useFileTransfer(
         updateTransfer(fileId, done);
         onFileReceived(done);
 
-        // Persist to IndexedDB so it survives reload
-        saveReceivedFile(fileId, blob, {
+        // Persist to IndexedDB with roomId so it only shows in this room
+        saveReceivedFile(fileId, roomId, blob, {
           fileName: incoming.fileName, fileType: incoming.fileType,
           fileSize: incoming.fileSize, senderName: incoming.senderName,
         });
