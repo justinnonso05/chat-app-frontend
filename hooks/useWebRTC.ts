@@ -166,9 +166,14 @@ export function useWebRTC(
     };
 
     pc.oniceconnectionstatechange = () => {
-      if (['disconnected', 'failed', 'closed'].includes(pc.iceConnectionState)) {
+      const state = pc.iceConnectionState;
+      if (state === 'failed') {
+        // Restart ICE instead of requiring a full page refresh
+        console.log(`[WebRTC] ICE failed for ${peerId}, restarting ICE...`);
+        pc.restartIce();
+      } else if (state === 'disconnected' || state === 'closed') {
         updatePeerStatus(peerId, peerName, false);
-      } else if (pc.iceConnectionState === 'connected') {
+      } else if (state === 'connected' || state === 'completed') {
         updatePeerStatus(peerId, peerName, true);
       }
     };
@@ -204,22 +209,35 @@ export function useWebRTC(
 
     ws.onopen = () => {
       sendSignaling({ type: 'join', senderId: deviceId, senderName: displayName });
+      // Re-announce after 3s — picks up peers who joined just before us and missed our initial message
+      setTimeout(() => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          sendSignaling({ type: 'join', senderId: deviceId, senderName: displayName });
+        }
+      }, 3000);
     };
 
     ws.onmessage = async (event) => {
       const data = JSON.parse(event.data);
 
       if (data.type === 'join' && data.senderId !== deviceId) {
-        const pc = createPeerConnection(data.senderId, data.senderName, true);
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        sendSignaling({
-          type: 'offer',
-          offer: pc.localDescription,
-          targetId: data.senderId,
-          senderId: deviceId,
-          senderName: displayName,
-        });
+        const existingPc = pcRef.current[data.senderId];
+        const alreadyConnected = existingPc &&
+          (existingPc.iceConnectionState === 'connected' || existingPc.iceConnectionState === 'completed');
+
+        if (!alreadyConnected) {
+          // New peer or a peer whose connection failed — (re-)initiate
+          const pc = createPeerConnection(data.senderId, data.senderName, true);
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          sendSignaling({
+            type: 'offer',
+            offer: pc.localDescription,
+            targetId: data.senderId,
+            senderId: deviceId,
+            senderName: displayName,
+          });
+        }
       }
 
       if (data.targetId && data.targetId !== deviceId) return;
@@ -250,20 +268,20 @@ export function useWebRTC(
       }
 
       if (data.type === 'candidate') {
+        // ALWAYS queue first — PC or remote desc may not exist yet
+        if (!pendingCandidates.current[data.senderId]) {
+          pendingCandidates.current[data.senderId] = [];
+        }
         const pc = pcRef.current[data.senderId];
-        if (pc) {
-          if (isRemoteDescSet.current[data.senderId]) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-            } catch (e) {
-              console.error('Error adding received ice candidate', e);
-            }
-          } else {
-            if (!pendingCandidates.current[data.senderId]) {
-              pendingCandidates.current[data.senderId] = [];
-            }
-            pendingCandidates.current[data.senderId].push(data.candidate);
+        if (pc && isRemoteDescSet.current[data.senderId]) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+          } catch (e) {
+            console.error('[WebRTC] Error adding ice candidate', e);
           }
+        } else {
+          // PC not created yet or remote desc not set — will be flushed later
+          pendingCandidates.current[data.senderId].push(data.candidate);
         }
       }
     };
