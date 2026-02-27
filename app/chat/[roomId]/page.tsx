@@ -50,6 +50,7 @@ export default function ChatDashboard() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [showLeft, setShowLeft] = useState(false);
   const [showRight, setShowRight] = useState(false);
+  const [roomRole, setRoomRole] = useState<"host" | "member">("member");
 
   useEffect(() => {
     const name = localStorage.getItem("displayName");
@@ -63,6 +64,9 @@ export default function ChatDashboard() {
       .sort((a: any, b: any) => b.lastAccessed - a.lastAccessed)
       .map((r: any) => ({ roomId: r.roomId }));
     setSavedRooms(list);
+
+    const role = sessionStorage.getItem("roomRole") as "host" | "member" | null;
+    setRoomRole(role ?? "member");
 
     setIsDark(document.documentElement.classList.contains("dark"));
     const obs = new MutationObserver(() => setIsDark(document.documentElement.classList.contains("dark")));
@@ -182,8 +186,11 @@ export default function ChatDashboard() {
         </div>
       </aside>
 
-      {/* ── MAIN CHAT — transparent so fixed wallpaper shows through ── */}
-      <main className="flex-1 flex flex-col h-[100dvh] min-w-0 relative z-10">
+      {/* ── MAIN CHAT — grid keeps header/input pinned regardless of keyboard ── */}
+      <main
+        className="flex-1 min-w-0 relative z-10"
+        style={{ display: "grid", gridTemplateRows: "auto 1fr auto", height: "100dvh" }}
+      >
         <div className={`${HEADER_H} shrink-0 border-b border-white/10 dark:border-white/5 flex items-center justify-between px-4 gap-3 relative z-10`} style={{ background: 'var(--chat-header-glass)', backdropFilter: 'blur(40px)', WebkitBackdropFilter: 'blur(40px)' }}>
           {/* Left actions */}
           <div className="flex items-center gap-2 min-w-0">
@@ -329,7 +336,9 @@ export default function ChatDashboard() {
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{displayName}</p>
-                  <p className="text-[10px] text-text-muted">You (Host)</p>
+                  <p className="text-[10px] text-text-muted">
+                    {roomRole === "host" ? "You · Host" : "You · Member"}
+                  </p>
                 </div>
               </div>
               {/* Peers */}
