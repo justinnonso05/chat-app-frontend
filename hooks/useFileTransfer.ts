@@ -274,10 +274,11 @@ export function useFileTransfer(
         const blobUrl = URL.createObjectURL(blob);
         blobUrlsRef.current[fileId] = blobUrl;
 
+        const createdAt = incomingRef.current[fileId]?.startTime ?? Date.now();
         const done: FileTransferState = {
           fileId, fileName: incoming.fileName, fileSize: incoming.fileSize,
           fileType: incoming.fileType, progress: 1, speedBps: 0,
-          direction: 'receiving', senderName: incoming.senderName, done: true, blobUrl,
+          direction: 'receiving', senderName: incoming.senderName, done: true, blobUrl, createdAt,
         };
 
         updateTransfer(fileId, done);
