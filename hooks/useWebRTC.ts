@@ -1,29 +1,28 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { API_ENDPOINTS } from '@/lib/api-endpoints';
 
-const ICE_SERVERS = {
+const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
+    // STUN — fast path for same-NAT pairs
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun3.l.google.com:19302" },
-    { urls: "stun:stun4.l.google.com:19302" },
-    {
-      urls: "turn:openrelay.metered.ca:80",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turn:openrelay.metered.ca:443",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turn:openrelay.metered.ca:443?transport=tcp",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
+    { urls: "stun:stun.cloudflare.com:3478" },
+
+    // OpenRelay TURN — UDP + TCP + TLS (crosses most carrier NATs)
+    { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turns:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+
+    // Metered.ca free TURN (different pool from openrelay)
+    { urls: "turn:a.relay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:a.relay.metered.ca:80?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:a.relay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turns:a.relay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
   ],
+  // Gather all candidates before connecting — improves cross-NAT success rate
+  iceCandidatePoolSize: 10,
 };
 
 export type MessageInfo = {

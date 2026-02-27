@@ -110,6 +110,7 @@ export type FileTransferState = {
   done: boolean;
   blobUrl?: string;
   error?: string;
+  createdAt: number;
 };
 
 // ── Binary framing ────────────────────────────────────────────────────────────
@@ -192,7 +193,7 @@ export function useFileTransfer(
       restored.push({
         fileId: meta.fileId, fileName: meta.fileName, fileSize: meta.fileSize,
         fileType: meta.fileType, progress: 1, speedBps: 0, direction: 'sending',
-        senderName: meta.senderName, done: true,
+        senderName: meta.senderName, done: true, createdAt: meta.savedAt,
       });
     });
 
@@ -204,7 +205,7 @@ export function useFileTransfer(
         return {
           fileId: f.fileId, fileName: f.fileName, fileSize: f.fileSize,
           fileType: f.fileType, progress: 1, speedBps: 0, direction: 'receiving',
-          senderName: f.senderName, done: true, blobUrl: url,
+          senderName: f.senderName, done: true, blobUrl: url, createdAt: f.savedAt,
         };
       });
       setTransfers(prev => {
@@ -242,7 +243,7 @@ export function useFileTransfer(
       };
       setTransfers(prev => [...prev, {
         fileId, fileName, fileSize, fileType, progress: 0,
-        speedBps: 0, direction: 'receiving', senderName, done: false,
+        speedBps: 0, direction: 'receiving', senderName, done: false, createdAt: Date.now(),
       }]);
     }
 
@@ -304,6 +305,7 @@ export function useFileTransfer(
       fileId, fileName: file.name, fileSize: file.size,
       fileType: file.type || 'application/octet-stream',
       progress: 0, speedBps: 0, direction: 'sending', senderName: displayName, done: false,
+      createdAt: Date.now(),
     };
     setTransfers(prev => [...prev, newTransfer]);
 

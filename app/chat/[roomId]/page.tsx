@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { useWebRTC } from '@/hooks/useWebRTC';
@@ -51,6 +51,7 @@ export default function ChatDashboard() {
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     const name = localStorage.getItem("displayName");
@@ -71,7 +72,22 @@ export default function ChatDashboard() {
     setIsDark(document.documentElement.classList.contains("dark"));
     const obs = new MutationObserver(() => setIsDark(document.documentElement.classList.contains("dark")));
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => obs.disconnect();
+
+    // Lock container height to the visual viewport so the keyboard doesn't push the header off-screen
+    // Works with interactive-widget=resizes-visual on Chrome Android
+    const applyVh = () => {
+      const h = window.visualViewport?.height ?? window.innerHeight;
+      document.documentElement.style.setProperty("--app-height", `${h}px`);
+    };
+    applyVh();
+    window.visualViewport?.addEventListener("resize", applyVh);
+    window.addEventListener("resize", applyVh);
+
+    return () => {
+      obs.disconnect();
+      window.visualViewport?.removeEventListener("resize", applyVh);
+      window.removeEventListener("resize", applyVh);
+    };
   }, [router, roomId]);
 
   // useFileTransfer needs to be declared before useWebRTC so handleBinaryMessage ref is stable
@@ -110,13 +126,55 @@ export default function ChatDashboard() {
 
   const activeTransfers = transfers.filter(t => !t.done);
 
+  // Unified chronological timeline — messages and file transfers sorted by time
+  const timeline = useMemo(() => {
+    type TLMsg = { kind: 'message'; data: typeof messages[0]; key: string };
+    type TLFile = { kind: 'transfer'; data: typeof transfers[0]; key: string };
+    const items: (TLMsg | TLFile)[] = [
+      ...messages.map(m => ({ kind: 'message' as const, data: m, key: `msg-${m.timestamp}-${m.senderId}` })),
+      ...transfers.map(t => ({ kind: 'transfer' as const, data: t, key: t.fileId })),
+    ];
+    items.sort((a, b) => {
+      // message.timestamp is ISO string, transfer.createdAt is ms number — normalise both to ms
+      const ta = a.kind === 'message' ? new Date(a.data.timestamp).getTime() : a.data.createdAt;
+      const tb = b.kind === 'message' ? new Date(b.data.timestamp).getTime() : b.data.createdAt;
+      return ta - tb;
+    });
+    return items;
+  }, [messages, transfers]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, transfers]);
 
-  const handleSend = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (text.trim()) { sendMessage(text.trim()); setText(""); }
+  const handleSend = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (text.trim()) {
+      sendMessage(text.trim());
+      setText("");
+      // Reset textarea height after clearing
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+      }
+    }
+  };
+
+  // Desktop: Enter sends, Shift+Enter adds newline
+  // Mobile (touch): Enter never sends — just adds newline
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Enter") return;
+    const isTouchDevice = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+    if (isTouchDevice) return; // mobile: always allow Enter as newline
+    if (!e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+    // Shift+Enter: allow default (adds newline)
+  };
+
+  const autoResize = (el: HTMLTextAreaElement) => {
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`; // max ~6 lines
   };
 
   const copyRoomId = () => {
@@ -129,7 +187,7 @@ export default function ChatDashboard() {
     "absolute inset-y-0 z-30 flex flex-col border-r border-[var(--panel-border)] w-72 xl:w-64 transition-transform duration-300 ease-in-out xl:relative xl:translate-x-0 xl:z-0 h-full";
 
   return (
-    <div className="h-[100dvh] w-full flex overflow-hidden text-foreground relative">
+    <div className="w-full flex overflow-hidden text-foreground relative" style={{ height: "var(--app-height, 100dvh)" }}>
 
       {/* Fixed wallpaper layer */}
       <div
@@ -262,22 +320,26 @@ export default function ChatDashboard() {
               </div>
             )}
 
-            {messages.map((msg, i) => {
+            {timeline.map(item => {
+              if (item.kind === 'transfer') {
+                return <FileMessage key={item.key} transfer={item.data} isMe={item.data.direction === 'sending'} onDismiss={clearTransfer} />;
+              }
+              const msg = item.data;
               const isMe = msg.senderId === deviceId;
-              const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+              const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
               return isMe ? (
-                <div key={i} className="flex justify-end">
+                <div key={item.key} className="flex justify-end">
                   <div className="max-w-[75%] sm:max-w-[60%]">
                     <div className="flex items-center justify-end gap-1.5 mb-1 pr-1">
                       <span className="text-[10px] text-text-muted">{time}</span>
                     </div>
-                    <div className="bg-primary text-white px-4 py-2.5 rounded-2xl rounded-br-md text-sm leading-relaxed shadow-sm">
+                    <div className="bg-primary text-white px-4 py-2.5 rounded-2xl rounded-br-md text-sm leading-relaxed shadow-sm whitespace-pre-wrap break-words">
                       {msg.text}
                     </div>
                   </div>
                 </div>
               ) : (
-                <div key={i} className="flex items-end gap-2 max-w-[75%] sm:max-w-[60%]">
+                <div key={item.key} className="flex items-end gap-2 max-w-[75%] sm:max-w-[60%]">
                   <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0 ${avatarColor(msg.senderName)}`}>
                     {msg.senderName.charAt(0).toUpperCase()}
                   </div>
@@ -286,8 +348,8 @@ export default function ChatDashboard() {
                       <span className="text-[11px] font-semibold text-foreground">{msg.senderName}</span>
                       <span className="text-[10px] text-text-muted">{time}</span>
                     </div>
-                    <div className="px-4 py-2.5 rounded-2xl rounded-bl-md text-sm leading-relaxed text-foreground border border-white/20 dark:border-white/8"
-                      style={{ background: "var(--bubble-glass)", backdropFilter: "blur(32px)", WebkitBackdropFilter: "blur(32px)", boxShadow: "0 2px 12px rgba(0,0,0,0.08)" }}
+                    <div className="px-4 py-2.5 rounded-2xl rounded-bl-md text-sm leading-relaxed text-foreground border border-white/20 dark:border-white/8 whitespace-pre-wrap break-words"
+                      style={{ background: 'var(--bubble-glass)', backdropFilter: 'blur(32px)', WebkitBackdropFilter: 'blur(32px)', boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}
                     >
                       {msg.text}
                     </div>
@@ -295,11 +357,6 @@ export default function ChatDashboard() {
                 </div>
               );
             })}
-
-            {/* File transfer messages */}
-            {transfers.map(t => (
-              <FileMessage key={t.fileId} transfer={t} isMe={t.direction === "sending"} onDismiss={clearTransfer} />
-            ))}
 
             <div ref={bottomRef} />
           </div>
@@ -387,19 +444,22 @@ export default function ChatDashboard() {
             >
               {Icon.attach}
             </button>
-            <div className="flex-1 flex items-center gap-2 bg-secondary/70 border border-[var(--glass-border)] rounded-2xl px-4 py-2.5 focus-within:border-primary/40 transition-all">
-              <input
-                type="text"
+            <div className="flex-1 flex items-end gap-2 bg-secondary/70 border border-[var(--glass-border)] rounded-2xl px-4 py-2.5 focus-within:border-primary/40 transition-all">
+              <textarea
+                ref={textareaRef}
+                rows={1}
                 value={text}
-                onChange={e => setText(e.target.value)}
+                onChange={e => { setText(e.target.value); autoResize(e.target); }}
+                onKeyDown={handleKeyDown}
                 placeholder={isConnected ? "Message..." : peers.length > 0 ? "Connecting..." : "Waiting for peer..."}
-                className="flex-1 bg-transparent border-none focus:outline-none text-sm text-foreground placeholder:text-text-muted"
+                className="flex-1 bg-transparent border-none focus:outline-none text-sm text-foreground placeholder:text-text-muted resize-none leading-relaxed py-0.5 max-h-40 overflow-y-auto no-scrollbar"
               />
             </div>
             <button
-              type="submit"
+              type="button"
+              onClick={() => handleSend()}
               disabled={!text.trim() || !isConnected}
-              className="w-10 h-10 flex items-center justify-center rounded-xl bg-primary text-white hover:bg-primary/90 disabled:opacity-40 disabled:pointer-events-none transition-colors shadow-sm shrink-0"
+              className="w-10 h-10 flex items-center justify-center rounded-xl bg-primary text-white hover:bg-primary/90 disabled:opacity-40 disabled:pointer-events-none transition-colors shadow-sm shrink-0 self-end"
             >
               {Icon.send}
             </button>
