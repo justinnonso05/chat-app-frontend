@@ -86,7 +86,7 @@ export default function ChatDashboard() {
   );
 
   const { transfers, sendFile, handleBinaryMessage, clearTransfer } = useFileTransfer(
-    channelRef, deviceId, displayName, onFileReceived
+    channelRef, deviceId, displayName, roomId, onFileReceived
   );
 
   // Wire the real handler after both hooks are initialized
