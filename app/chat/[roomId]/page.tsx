@@ -18,11 +18,11 @@ const Icon = {
   send: <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>,
   copy: <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>,
   network: <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="5" r="3" /><circle cx="5" cy="19" r="3" /><circle cx="19" cy="19" r="3" /><path d="M12 8v5m-4.2 3.2L12 13m4.2 3.2L12 13" /></svg>,
-  attach: <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>,
+  attach: <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>,
 };
 
 const avatarColors: Record<string, string> = {};
-const palette = ["bg-blue-500","bg-violet-500","bg-rose-500","bg-amber-500","bg-emerald-500","bg-sky-500","bg-pink-500","bg-indigo-500"];
+const palette = ["bg-blue-500", "bg-violet-500", "bg-rose-500", "bg-amber-500", "bg-emerald-500", "bg-sky-500", "bg-pink-500", "bg-indigo-500"];
 function avatarColor(name: string): string {
   if (!avatarColors[name]) {
     let h = 0;
@@ -75,10 +75,10 @@ export default function ChatDashboard() {
   }, [router, roomId]);
 
   // useFileTransfer needs to be declared before useWebRTC so handleBinaryMessage ref is stable
-  const onFileReceived = useCallback((_transfer: FileTransferState) => {}, []);
+  const onFileReceived = useCallback((_transfer: FileTransferState) => { }, []);
 
   // Temporary stable ref so we can pass it to useWebRTC before useFileTransfer is called
-  const binaryHandlerRef = useRef<(data: ArrayBuffer, peerId: string, peerName: string) => void>(() => {});
+  const binaryHandlerRef = useRef<(data: ArrayBuffer, peerId: string, peerName: string) => void>(() => { });
 
   const { messages, sendMessage, peers, isConnected, error, channelRef } = useWebRTC(
     roomId, deviceId, displayName,
@@ -92,9 +92,21 @@ export default function ChatDashboard() {
   // Wire the real handler after both hooks are initialized
   binaryHandlerRef.current = handleBinaryMessage;
 
-  const handleFiles = useCallback((files: File[]) => {
-    files.forEach(f => sendFile(f));
-  }, [sendFile]);
+  // Stage files for preview before sending
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+
+  const stageFiles = useCallback((files: File[]) => {
+    setPendingFiles(prev => [...prev, ...files]);
+  }, []);
+
+  const sendPendingFiles = useCallback(() => {
+    pendingFiles.forEach(f => sendFile(f));
+    setPendingFiles([]);
+  }, [pendingFiles, sendFile]);
+
+  const removePending = (index: number) => {
+    setPendingFiles(prev => prev.filter((_, i) => i !== index));
+  };
 
   const activeTransfers = transfers.filter(t => !t.done);
 
@@ -236,8 +248,8 @@ export default function ChatDashboard() {
         </div>
 
         {/* Messages */}
-        <FileDropZone onFiles={handleFiles} disabled={!isConnected}>
-          <div className="overflow-y-auto no-scrollbar px-4 md:px-8 py-6 space-y-3 relative z-10 h-full">
+        <FileDropZone onFiles={stageFiles} disabled={!isConnected}>
+          <div className="overflow-y-auto overflow-x-hidden no-scrollbar px-4 md:px-8 py-6 space-y-3 relative z-10 h-full">
             <div className="flex justify-center mb-4">
               <span className="text-[11px] px-3 py-1 rounded-full glass border border-[var(--glass-border)] text-text-muted">
                 End-to-End Encrypted · Saved locally
@@ -323,8 +335,48 @@ export default function ChatDashboard() {
             type="file"
             multiple
             className="hidden"
-            onChange={e => { if (e.target.files) handleFiles(Array.from(e.target.files)); e.target.value = ""; }}
+            onChange={e => { if (e.target.files) stageFiles(Array.from(e.target.files)); e.target.value = ""; }}
           />
+
+          {/* File preview tray */}
+          {pendingFiles.length > 0 && (
+            <div className="mb-3 max-w-4xl mx-auto">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[11px] font-medium text-text-muted">{pendingFiles.length} file{pendingFiles.length > 1 ? "s" : ""} ready to send</span>
+                <button type="button" onClick={() => setPendingFiles([])} className="text-[11px] text-error hover:underline ml-auto">Clear all</button>
+              </div>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {pendingFiles.map((f, i) => {
+                  const isImg = f.type.startsWith("image/");
+                  const sizeStr = f.size < 1048576 ? `${(f.size / 1024).toFixed(0)} KB` : `${(f.size / 1048576).toFixed(1)} MB`;
+                  return (
+                    <div key={i} className="relative flex items-center gap-2 bg-secondary/80 border border-[var(--glass-border)] rounded-xl px-3 py-2 max-w-[200px]">
+                      {isImg
+                        ? <img src={URL.createObjectURL(f)} alt={f.name} className="w-8 h-8 rounded-lg object-cover shrink-0" />
+                        : <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary shrink-0">{Icon.attach}</div>
+                      }
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-medium truncate leading-tight">{f.name}</p>
+                        <p className="text-[10px] text-text-muted">{sizeStr}</p>
+                      </div>
+                      <button type="button" onClick={() => removePending(i)} className="w-4 h-4 rounded-full bg-error/20 text-error flex items-center justify-center shrink-0 hover:bg-error/40 transition-colors" title="Remove">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={sendPendingFiles}
+                disabled={!isConnected}
+                className="w-full py-2 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
+              >
+                Send {pendingFiles.length} file{pendingFiles.length > 1 ? "s" : ""}
+              </button>
+            </div>
+          )}
+
           <form onSubmit={handleSend} className="flex items-center gap-2 max-w-4xl mx-auto">
             <button
               type="button"
