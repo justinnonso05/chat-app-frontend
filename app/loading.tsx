@@ -4,7 +4,7 @@ export default function Loading() {
       <div className="flex flex-col items-center gap-5">
         <img
           src="/icon-512.png"
-          alt="LocalMesh"
+          alt="Voxs"
           className="w-20 h-20 rounded-[22px] shadow-xl animate-pulse"
         />
         <div className="flex items-center gap-2">

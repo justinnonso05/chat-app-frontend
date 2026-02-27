@@ -15,20 +15,20 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LocalMesh — P2P Chat & File Share",
+  title: "Voxs — P2P Chat & File Share",
   description: "Zero-install, anonymous peer-to-peer chat and file sharing over local Wi-Fi. No cloud. No accounts.",
   keywords: ["local chat", "p2p", "file sharing", "webrtc", "offline", "mesh network"],
-  authors: [{ name: "LocalMesh" }],
+  authors: [{ name: "Voxs" }],
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "LocalMesh",
+    title: "Voxs",
     startupImage: "/icon-512.png",
   },
   formatDetection: { telephone: false },
   openGraph: {
-    title: "LocalMesh — P2P Chat & File Share",
+    title: "Voxs — P2P Chat & File Share",
     description: "Zero-install local mesh chat. No accounts required.",
     type: "website",
   },

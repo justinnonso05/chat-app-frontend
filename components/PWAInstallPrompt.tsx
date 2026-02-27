@@ -55,11 +55,11 @@ export function PWAInstallPrompt() {
       >
         <div className="flex items-center gap-4 p-4">
           {/* Icon */}
-          <img src="/icon-192.png" alt="LocalMesh" className="w-14 h-14 rounded-[14px] shadow-md shrink-0" />
+          <img src="/icon-192.png" alt="Voxs" className="w-14 h-14 rounded-[14px] shadow-md shrink-0" />
 
           {/* Text */}
           <div className="flex-1 min-w-0">
-            <p className="font-semibold text-[15px] text-foreground leading-tight">Install LocalMesh</p>
+            <p className="font-semibold text-[15px] text-foreground leading-tight">Install Voxs</p>
             <p className="text-[12px] text-text-muted mt-0.5 leading-snug">
               Add to home screen for a full app experience — works offline.
             </p>

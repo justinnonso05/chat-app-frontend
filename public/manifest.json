@@ -1,6 +1,6 @@
 {
-  "name": "LocalMesh — P2P Chat & File Share",
-  "short_name": "LocalMesh",
+  "name": "Voxs — P2P Chat & File Share",
+  "short_name": "Voxs",
   "description": "Zero-install, anonymous local peer-to-peer chat and file sharing over Wi-Fi",
   "start_url": "/",
   "display": "standalone",
