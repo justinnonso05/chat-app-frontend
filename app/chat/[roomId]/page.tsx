@@ -49,7 +49,7 @@ export default function ChatDashboard() {
   const [showRight, setShowRight] = useState(false);
   const [roomRole, setRoomRole] = useState<"host" | "member">("member");
 
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -144,7 +144,10 @@ export default function ChatDashboard() {
   }, [messages, transfers]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Scroll within the messages container — NOT scrollIntoView which moves the whole page
+    if (messagesRef.current) {
+      messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+    }
   }, [messages, transfers]);
 
   const handleSend = (e?: React.FormEvent) => {
@@ -307,7 +310,7 @@ export default function ChatDashboard() {
 
         {/* Messages */}
         <FileDropZone onFiles={stageFiles} disabled={!isConnected}>
-          <div className="overflow-y-auto overflow-x-hidden no-scrollbar px-4 md:px-8 py-6 space-y-3 relative z-10 h-full">
+          <div ref={messagesRef} className="overflow-y-auto overflow-x-hidden no-scrollbar px-4 md:px-8 py-6 space-y-3 relative z-10 h-full">
             <div className="flex justify-center mb-4">
               <span className="text-[11px] px-3 py-1 rounded-full glass border border-[var(--glass-border)] text-text-muted">
                 End-to-End Encrypted · Saved locally
@@ -357,8 +360,7 @@ export default function ChatDashboard() {
                 </div>
               );
             })}
-
-            <div ref={bottomRef} />
+            {/* no sentinel div needed — scroll handled via messagesRef.scrollTop */}
           </div>
         </FileDropZone>
 
