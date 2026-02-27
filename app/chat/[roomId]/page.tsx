@@ -5,183 +5,255 @@ import { useParams, useRouter } from 'next/navigation';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { useWebRTC } from '@/hooks/useWebRTC';
 
+// --- Icon helpers (inline SVG to avoid extra deps) ---
+const Icon = {
+  menu: <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="18" x2="21" y2="18" /></svg>,
+  close: <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>,
+  info: <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>,
+  logout: <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" x2="9" y1="12" y2="12" /></svg>,
+  plus: <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>,
+  send: <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>,
+  copy: <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>,
+  network: <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="5" r="3" /><circle cx="5" cy="19" r="3" /><circle cx="19" cy="19" r="3" /><path d="M12 8v5m-4.2 3.2L12 13m4.2 3.2L12 13" /></svg>,
+};
+
+// Deterministic color per initial for peer avatars
+const avatarColors: Record<string, string> = {};
+const palette = [
+  "bg-blue-500", "bg-violet-500", "bg-rose-500", "bg-amber-500",
+  "bg-emerald-500", "bg-sky-500", "bg-pink-500", "bg-indigo-500",
+];
+function avatarColor(name: string): string {
+  if (!avatarColors[name]) {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h += name.charCodeAt(i);
+    avatarColors[name] = palette[h % palette.length];
+  }
+  return avatarColors[name];
+}
+
+// Header height shared across all three columns
+const HEADER_H = "h-[64px]";
+
 export default function ChatDashboard() {
-  const { roomId } = useParams();
+  const params = useParams();
+  const roomId = Array.isArray(params.roomId) ? params.roomId[0] : (params.roomId ?? "");
   const router = useRouter();
 
   const [displayName, setDisplayName] = useState("Anonymous Peer");
   const [deviceId, setDeviceId] = useState("");
   const [text, setText] = useState("");
+  const [savedRooms, setSavedRooms] = useState<{ roomId: string }[]>([]);
+  const [copied, setCopied] = useState(false);
+  const [isDark, setIsDark] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
-  const [showSidebar, setShowSidebar] = useState(false);
+  const [showLeft, setShowLeft] = useState(false);
+  const [showRight, setShowRight] = useState(false);
 
-  // Initialize from LocalStorage defensively
   useEffect(() => {
     const name = localStorage.getItem("displayName");
     const id = localStorage.getItem("deviceId");
-
-    if (!name || !id) {
-      router.push("/");
-      return;
-    }
+    if (!name || !id) { router.push("/"); return; }
     setDisplayName(name);
     setDeviceId(id);
-  }, [router]);
 
-  // Pass properly sanitized IDs to WebRTC engine
-  const { messages, sendMessage, peers, isConnected, error } = useWebRTC(roomId as string, deviceId, displayName);
+    const rooms = JSON.parse(localStorage.getItem("savedRooms") || "{}");
+    const list = Object.values(rooms)
+      .sort((a: any, b: any) => b.lastAccessed - a.lastAccessed)
+      .map((r: any) => ({ roomId: r.roomId }));
+    setSavedRooms(list);
 
-  // Auto-scroll to latest message
+    setIsDark(document.documentElement.classList.contains("dark"));
+    const obs = new MutationObserver(() => setIsDark(document.documentElement.classList.contains("dark")));
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, [router, roomId]);
+
+  const { messages, sendMessage, peers, isConnected, error } = useWebRTC(roomId, deviceId, displayName);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
-    if (text.trim()) {
-      sendMessage(text);
-      setText("");
-    }
+    if (text.trim()) { sendMessage(text.trim()); setText(""); }
   };
 
+  const copyRoomId = () => {
+    navigator.clipboard.writeText(roomId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  // Sidebar shared column classes
+  const sidebarBase =
+    "absolute inset-y-0 z-30 flex flex-col border-r border-[var(--panel-border)] w-72 xl:w-64 transition-transform duration-300 ease-in-out xl:relative xl:translate-x-0 xl:z-0 h-full";
+
   return (
-    <div className="h-screen w-full flex p-0 md:p-4 lg:p-6 gap-0 md:gap-4 lg:gap-6 bg-background relative overflow-hidden">
-      
-      {/* Mobile Sidebar Overlay */}
-      {showSidebar && (
-        <div 
-          className="absolute inset-0 bg-black/50 z-20 md:hidden"
-          onClick={() => setShowSidebar(false)}
+    <div className="h-[100dvh] w-full flex overflow-hidden text-foreground relative">
+
+      {/* Fixed wallpaper layer — immune to layout shifts, keyboard & sidebar */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: -1,
+          backgroundImage: `url(/${isDark ? "dark" : "light"}.jpg)`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat",
+          // Strong dim so text is always readable
+          filter: "brightness(0.9)",
+        }}
+      />
+      {/* Extra overlay to further dim / tint wallpaper */}
+      <div aria-hidden="true" className="fixed inset-0 z-0 pointer-events-none bg-background/88 dark:bg-background/90" />
+
+      {/* Mobile overlay tap-away */}
+      {(showLeft || showRight) && (
+        <div
+          className="xl:hidden absolute inset-0 z-20 bg-black/40"
+          onClick={() => { setShowLeft(false); setShowRight(false); }}
         />
       )}
 
-      {/* Left Sidebar */}
-      <aside className={`absolute md:static z-30 inset-y-0 left-0 w-80 bg-panel-bg md:border border-panel-border md:rounded-2xl shadow-xl md:shadow-sm flex flex-col transition-transform duration-300 ${showSidebar ? "translate-x-0" : "-translate-x-full"} md:translate-x-0 h-full`}>
-
-        {/* Profile Header */}
-        <div className="p-4 border-b border-panel-border flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-orange-200 flex items-center justify-center font-bold text-orange-600 shrink-0">
-              {displayName.charAt(0).toUpperCase() || "A"}
+      {/* ── LEFT SIDEBAR — fully opaque, no blur ── */}
+      <aside
+        className={`${sidebarBase} left-0 ${showLeft ? "translate-x-0" : "-translate-x-full"}`}
+        style={{ backgroundColor: isDark ? "#18181b" : "#ffffff", backdropFilter: "none", WebkitBackdropFilter: "none" }}
+      >
+        {/* Header */}
+        <div className={`${HEADER_H} flex items-center justify-between px-5 border-b border-[var(--glass-border)] shrink-0`}>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-semibold shrink-0 ${avatarColor(displayName)}`}>
+              {displayName.charAt(0).toUpperCase()}
             </div>
-            <div className="overflow-hidden">
-              <h3 className="font-medium text-foreground truncate">{displayName}</h3>
-              <p className="text-xs text-text-muted">You (Local Device)</p>
+            <div className="min-w-0">
+              <p className="font-semibold text-sm truncate leading-tight">{displayName}</p>
+              <p className="text-[11px] text-text-muted leading-tight">Local Device</p>
             </div>
           </div>
-          <button onClick={() => setShowSidebar(false)} className="md:hidden p-2 text-text-muted hover:text-foreground">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          <button onClick={() => setShowLeft(false)} className="xl:hidden text-text-muted hover:text-foreground p-1.5 rounded-lg transition-colors">
+            {Icon.close}
           </button>
         </div>
 
-        {/* QR Code / Share Room Info */}
-        <div className="p-4 border-b border-panel-border bg-accent/50">
-          <p className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">Connect Peers</p>
-          <div className="flex bg-panel-bg p-3 rounded-xl border border-panel-border items-center justify-between">
-            <div>
-              <span className="text-xs text-text-muted">Room Code:</span>
-              <p className="font-mono font-bold text-primary tracking-widest text-lg">{roomId}</p>
-            </div>
-            <button className="h-10 w-10 bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground flex justify-center items-center rounded-lg transition-colors" title="Show QR Code">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="5" height="5" x="3" y="3" rx="1" /><rect width="5" height="5" x="16" y="3" rx="1" /><rect width="5" height="5" x="3" y="16" rx="1" /><path d="M21 16h-3a2 2 0 0 0-2 2v3" /><path d="M21 21v.01" /><path d="M12 7v3a2 2 0 0 1-2 2H7" /><path d="M3 12h.01" /><path d="M12 3h.01" /><path d="M12 16v.01" /><path d="M16 12h1" /><path d="M21 12v.01" /><path d="M12 21v-1" /></svg>
-            </button>
-          </div>
+        {/* Create / Join */}
+        <div className="px-4 py-3 border-b border-[var(--glass-border)] shrink-0">
+          <button
+            onClick={() => router.push("/")}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-primary/10 hover:bg-primary/20 text-primary text-sm font-medium transition-colors border border-primary/15"
+          >
+            {Icon.plus} Create / Join Network
+          </button>
         </div>
 
-        {/* Connected Mesh Peers list */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <div className="flex justify-between items-center mb-2">
-            <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider">Local Mesh Network</h4>
-            <span className="text-xs bg-success/20 text-success px-2 py-0.5 rounded-full font-medium">{peers.length + 1} / 3 connected</span>
-          </div>
-
-          {peers.length === 0 && !error ? (
-            <div className="flex items-center gap-3 p-2 -mx-2 rounded-lg opacity-50">
-              <div className="w-10 h-10 rounded-full border border-dashed border-panel-border flex items-center justify-center">
-                <span className="w-2 h-2 rounded-full animate-pulse bg-text-muted"></span>
+        {/* Saved rooms */}
+        <div className="flex-1 overflow-y-auto thin-scrollbar px-3 py-3 space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-text-muted px-2 pb-2">Saved Networks</p>
+          {savedRooms.map(r => (
+            <button
+              key={r.roomId}
+              onClick={() => { setShowLeft(false); if (r.roomId !== roomId) router.push(`/chat/${r.roomId}`); }}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all ${r.roomId === roomId
+                ? "bg-primary/12 border border-primary/20 text-primary"
+                : "hover:bg-secondary text-foreground border border-transparent"}`}
+            >
+              <span className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-sm ${r.roomId === roomId ? "bg-primary/15 text-primary" : "bg-secondary text-text-muted"}`}>
+                {Icon.network}
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate leading-tight">{r.roomId}</p>
+                <p className="text-[10px] text-text-muted truncate">P2P Bridge</p>
               </div>
-              <div className="flex-1 min-w-0">
-                <h5 className="font-medium text-sm text-foreground truncate">Waiting for peers to join...</h5>
-              </div>
-            </div>
-          ) : (
-            peers.map(peer => (
-              <div key={peer.id} className="flex items-center gap-3 p-2 -mx-2 rounded-lg transition-colors bg-secondary/30">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold text-indigo-700 bg-indigo-200 shadow-sm border-2 ${peer.isConnected ? 'border-success' : 'border-dashed border-panel-border opacity-50'}`}>
-                  {peer.name.charAt(0).toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h5 className="font-medium text-sm text-foreground truncate">{peer.name}</h5>
-                  <p className={`text-xs ${peer.isConnected ? 'text-success' : 'text-text-muted'}`}>
-                    {peer.isConnected ? 'Connected via P2P' : 'Negotiating bridge...'}
-                  </p>
-                </div>
-              </div>
-            ))
+            </button>
+          ))}
+          {savedRooms.length === 0 && (
+            <p className="text-[13px] text-text-muted text-center py-8">No saved rooms yet</p>
           )}
+        </div>
 
-          {error && (
-            <div className="p-3 bg-error/10 border border-error/20 rounded-lg">
-              <p className="text-xs text-error font-medium">{error}</p>
-            </div>
-          )}
+        {/* Footer */}
+        <div className={`px-4 py-3 border-t border-[var(--glass-border)] shrink-0`}>
+          <ThemeToggle />
         </div>
       </aside>
 
-      {/* Main Chat Area */}
-      <main className="flex-1 bg-panel-bg md:border border-panel-border md:rounded-2xl shadow-sm flex flex-col overflow-hidden h-full">
-        <header className="p-3 md:p-4 border-b border-panel-border flex justify-between items-center bg-panel-bg">
-          <div className="flex items-center gap-2 md:gap-3">
-            <button onClick={() => setShowSidebar(true)} className="md:hidden p-2 text-text-muted hover:text-foreground">
-               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+      {/* ── MAIN CHAT — transparent so fixed wallpaper shows through ── */}
+      <main className="flex-1 flex flex-col h-[100dvh] min-w-0 relative z-10">
+        <div className={`${HEADER_H} shrink-0 border-b border-white/10 dark:border-white/5 flex items-center justify-between px-4 gap-3 relative z-10`} style={{ background: 'var(--chat-header-glass)', backdropFilter: 'blur(40px)', WebkitBackdropFilter: 'blur(40px)' }}>
+          {/* Left actions */}
+          <div className="flex items-center gap-2 min-w-0">
+            <button onClick={() => setShowLeft(true)} className="xl:hidden text-text-muted hover:text-foreground p-2 rounded-xl hover:bg-secondary transition-colors shrink-0">
+              {Icon.menu}
             </button>
-            <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary shrink-0">
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" /><polyline points="14 2 14 8 20 8" /><path d="M8 13h2" /><path d="M8 17h2" /><path d="M14 13h2" /><path d="M14 17h2" /></svg>
+            <div className="w-9 h-9 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary font-bold text-sm shrink-0">
+              {String(roomId).charAt(0)}
             </div>
-            <div className="overflow-hidden">
-              <h2 className="font-semibold text-foreground text-sm md:text-base truncate">Local Room: {roomId}</h2>
-              <p className="text-[10px] md:text-xs text-text-muted truncate">Direct P2P Encrypted Channel</p>
+            <div className="min-w-0">
+              <p className="font-semibold text-sm truncate leading-tight">{roomId}</p>
+              <p className="text-[11px] text-text-muted flex items-center gap-1.5 leading-tight mt-0.5">
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isConnected ? "bg-success" : "bg-warning animate-pulse"}`} />
+                {isConnected ? "Bridge Active" : peers.length > 0 ? "Connecting..." : "Waiting for peers"}
+              </p>
             </div>
           </div>
-          <div className="flex gap-2 md:gap-4 text-text-muted items-center shrink-0">
-            <ThemeToggle />
+          {/* Right actions */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => router.push("/")}
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-error text-sm font-medium hover:bg-error/10 border border-error/15 transition-colors"
+            >
+              {Icon.logout} Leave
+            </button>
+            <button onClick={() => setShowRight(true)} className="xl:hidden text-text-muted hover:text-foreground p-2 rounded-xl hover:bg-secondary transition-colors">
+              {Icon.info}
+            </button>
           </div>
-        </header>
+        </div>
 
-        {/* Chat History */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          <div className="flex justify-center w-full my-4">
-            <span className="text-xs px-4 py-1.5 bg-secondary text-text-muted rounded-full">
-              End-to-End Encrypted. Messages are strictly bound to this browser window.
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto no-scrollbar px-4 md:px-8 py-6 space-y-3 relative z-10">
+          <div className="flex justify-center mb-4">
+            <span className="text-[11px] px-3 py-1 rounded-full glass border border-[var(--glass-border)] text-text-muted">
+              End-to-End Encrypted · Saved locally
             </span>
           </div>
 
-          {messages.map((msg, index) => {
+          {error && (
+            <div className="flex justify-center">
+              <span className="text-[12px] px-4 py-1.5 rounded-full bg-error/10 border border-error/20 text-error">{error}</span>
+            </div>
+          )}
+
+          {messages.map((msg, i) => {
             const isMe = msg.senderId === deviceId;
+            const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
             return isMe ? (
-              <div key={index} className="flex justify-end w-full">
-                <div className="max-w-[80%] lg:max-w-[70%]">
-                  <div className="flex justify-end items-baseline gap-2 mb-1">
-                    <span className="font-medium text-sm text-foreground">You</span>
-                    <span className="text-xs text-text-muted">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              <div key={i} className="flex justify-end">
+                <div className="max-w-[75%] sm:max-w-[60%]">
+                  <div className="flex items-center justify-end gap-1.5 mb-1 pr-1">
+                    <span className="text-[10px] text-text-muted">{time}</span>
                   </div>
-                  <div className="bg-primary text-primary-foreground p-4 rounded-2xl rounded-tr-none text-sm leading-relaxed shadow-sm">
+                  <div className="bg-primary text-white px-4 py-2.5 rounded-2xl rounded-br-md text-sm leading-relaxed shadow-sm">
                     {msg.text}
                   </div>
                 </div>
               </div>
             ) : (
-              <div key={index} className="flex gap-3 max-w-[80%]">
-                <div className="w-8 h-8 rounded-full bg-indigo-200 shrink-0 mt-1 flex items-center justify-center font-bold text-indigo-700 text-xs">
+              <div key={i} className="flex items-end gap-2 max-w-[75%] sm:max-w-[60%]">
+                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0 ${avatarColor(msg.senderName)}`}>
                   {msg.senderName.charAt(0).toUpperCase()}
                 </div>
                 <div>
-                  <div className="flex items-baseline gap-2 mb-1">
-                    <span className="font-medium text-sm text-foreground">{msg.senderName}</span>
-                    <span className="text-xs text-text-muted">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  <div className="flex items-center gap-1.5 mb-1 pl-1">
+                    <span className="text-[11px] font-semibold text-foreground">{msg.senderName}</span>
+                    <span className="text-[10px] text-text-muted">{time}</span>
                   </div>
-                  <div className="bg-secondary text-secondary-foreground p-3 rounded-2xl rounded-tl-none text-sm shadow-sm border border-panel-border/50">
+                  <div className="px-4 py-2.5 rounded-2xl rounded-bl-md text-sm leading-relaxed text-foreground border border-white/20 dark:border-white/8" style={{ background: 'var(--bubble-glass)', backdropFilter: 'blur(32px)', WebkitBackdropFilter: 'blur(32px)', boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
                     {msg.text}
                   </div>
                 </div>
@@ -191,27 +263,116 @@ export default function ChatDashboard() {
           <div ref={bottomRef} />
         </div>
 
-        {/* Chat Input */}
-        <form onSubmit={handleSend} className="p-4 border-t border-panel-border bg-panel-bg z-20">
-          <div className="bg-secondary rounded-full h-12 flex items-center px-2 cursor-text focus-within:ring-2 focus-within:ring-primary focus-within:ring-opacity-50 transition-all">
-            <button type="button" className="text-text-muted hover:bg-panel-bg hover:text-foreground hover:shadow-sm rounded-full transition-all p-2 m-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+        {/* Input */}
+        <div className="shrink-0 px-4 md:px-8 py-4 border-t border-white/10 dark:border-white/5 relative z-10" style={{ background: 'var(--chat-header-glass)', backdropFilter: 'blur(40px)', WebkitBackdropFilter: 'blur(40px)' }}>
+          <form onSubmit={handleSend} className="flex items-center gap-3 max-w-4xl mx-auto">
+            <div className="flex-1 flex items-center gap-2 bg-secondary/70 border border-[var(--glass-border)] rounded-2xl px-4 py-2.5 focus-within:border-primary/40 focus-within:ring-3 focus-within:ring-primary/10 transition-all">
+              <input
+                type="text"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder={isConnected ? "Message..." : peers.length > 0 ? "Connecting..." : "Waiting for peer..."}
+                className="flex-1 bg-transparent border-none focus:outline-none text-sm text-foreground placeholder:text-text-muted"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={!text.trim() || !isConnected}
+              className="w-10 h-10 flex items-center justify-center rounded-xl bg-primary text-white hover:bg-primary/90 disabled:opacity-40 disabled:pointer-events-none transition-colors shadow-sm shrink-0"
+            >
+              {Icon.send}
             </button>
-            <input
-              type="text"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder={isConnected ? "Send a message locally..." : (peers.length > 0 ? "Negotiating bridge..." : "Waiting for peer connection...")}
-              disabled={!isConnected}
-              className="flex-1 bg-transparent border-none focus:outline-none text-foreground px-2 text-sm max-w-full disabled:opacity-50"
-            />
-            <button type="submit" disabled={!text.trim() || !isConnected} className="text-primary p-2 m-1 hover:bg-panel-bg hover:shadow-sm rounded-full transition-all shrink-0 disabled:opacity-50 disabled:hover:bg-transparent">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>
-            </button>
-          </div>
-        </form>
+          </form>
+        </div>
       </main>
 
+      {/* ── RIGHT SIDEBAR — fully opaque, no blur ── */}
+      <aside
+        className={`${sidebarBase.replace("border-r", "border-l")} right-0 left-auto ${showRight ? "translate-x-0" : "translate-x-full"}`}
+        style={{ backgroundColor: isDark ? "#18181b" : "#ffffff", backdropFilter: "none", WebkitBackdropFilter: "none" }}
+      >
+        {/* Header */}
+        <div className={`${HEADER_H} flex items-center justify-between px-5 border-b border-[var(--glass-border)] shrink-0`}>
+          <p className="font-semibold text-sm">Network Setup</p>
+          <button onClick={() => setShowRight(false)} className="xl:hidden text-text-muted hover:text-foreground p-1.5 rounded-lg transition-colors">
+            {Icon.close}
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto thin-scrollbar px-4 py-5 space-y-6">
+          {/* Access Key */}
+          <section>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-text-muted mb-3">Access Key</p>
+            <div className="bg-secondary/60 rounded-2xl border border-[var(--glass-border)] p-4 text-center">
+              <p className="font-mono font-bold text-primary text-2xl tracking-widest mb-3">{roomId}</p>
+              <button
+                onClick={copyRoomId}
+                className="inline-flex items-center gap-1.5 text-xs text-foreground bg-panel-bg hover:bg-secondary px-3 py-1.5 rounded-lg transition-colors border border-[var(--glass-border)]"
+              >
+                {Icon.copy} {copied ? "Copied!" : "Copy Code"}
+              </button>
+            </div>
+          </section>
+
+          {/* Members */}
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">Members</p>
+              <span className="text-[10px] font-bold bg-primary/10 text-primary px-2 py-0.5 rounded-full border border-primary/15">{peers.length + 1} / 3</span>
+            </div>
+            <div className="space-y-1">
+              {/* Self */}
+              <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-primary/6 border border-primary/10">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0 ${avatarColor(displayName)}`}>
+                  {displayName.charAt(0).toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{displayName}</p>
+                  <p className="text-[10px] text-text-muted">You (Host)</p>
+                </div>
+              </div>
+              {/* Peers */}
+              {peers.map(peer => (
+                <div key={peer.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-secondary transition-colors">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0 ${avatarColor(peer.name)} ${!peer.isConnected && "opacity-50"}`}>
+                    {peer.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{peer.name}</p>
+                    <p className={`text-[10px] font-medium ${peer.isConnected ? "text-success" : "text-warning"}`}>
+                      {peer.isConnected ? "Connected" : "Connecting..."}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* Device Settings */}
+          <section>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-text-muted mb-3">Device Settings</p>
+            <div className="bg-secondary/60 rounded-2xl border border-[var(--glass-border)] divide-y divide-[var(--glass-border)]">
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-sm text-foreground">Max Capacity</span>
+                <span className="text-xs font-mono text-text-muted">3 (Fixed)</span>
+              </div>
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-sm text-foreground">Storage Mode</span>
+                <span className="text-xs text-text-muted">Local Device</span>
+              </div>
+            </div>
+          </section>
+
+          {/* Leave */}
+          <button
+            onClick={() => router.push("/")}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-error text-sm font-medium border border-error/15 hover:bg-error/8 transition-colors"
+          >
+            {Icon.logout} Disconnect & Leave
+          </button>
+        </div>
+      </aside>
     </div>
   );
 }

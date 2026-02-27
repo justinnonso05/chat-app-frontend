@@ -30,6 +30,27 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
   const pcRef = useRef<{ [peerId: string]: RTCPeerConnection }>({});
   const channelRef = useRef<{ [peerId: string]: RTCDataChannel }>({});
 
+  // Track remote description status to prevent ICE candidate race conditions
+  const isRemoteDescSet = useRef<{ [peerId: string]: boolean }>({});
+  const pendingCandidates = useRef<{ [peerId: string]: RTCIceCandidateInit[] }>({});
+
+  // Initialize saved messages and save room to local storage
+  useEffect(() => {
+    if (typeof window !== 'undefined' && roomId && deviceId && displayName) {
+      const savedRooms = JSON.parse(localStorage.getItem('savedRooms') || '{}');
+      if (!savedRooms[roomId]) {
+        savedRooms[roomId] = { roomId, name: roomId, messages: [], lastAccessed: Date.now() };
+      }
+
+      if (savedRooms[roomId].messages && savedRooms[roomId].messages.length > 0) {
+        setMessages(savedRooms[roomId].messages);
+      }
+
+      savedRooms[roomId].lastAccessed = Date.now();
+      localStorage.setItem('savedRooms', JSON.stringify(savedRooms));
+    }
+  }, [roomId, deviceId, displayName]);
+
   const sendSignaling = (data: any) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(data));
@@ -48,30 +69,67 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
 
   const removePeer = (peerId: string) => {
     setPeers(prev => prev.filter(p => p.id !== peerId));
+    if (pcRef.current[peerId]) {
+      pcRef.current[peerId].close();
+      delete pcRef.current[peerId];
+    }
+    if (channelRef.current[peerId]) {
+      delete channelRef.current[peerId];
+    }
+  };
+
+  // Helper to persist new messages
+  const persistMessage = (msgData: MessageInfo) => {
+    setMessages((prev) => {
+      const newMessages = [...prev, msgData];
+      if (typeof window !== 'undefined' && roomId) {
+        const savedRooms = JSON.parse(localStorage.getItem('savedRooms') || '{}');
+        if (savedRooms[roomId]) {
+          savedRooms[roomId].messages = newMessages;
+          savedRooms[roomId].lastAccessed = Date.now();
+          localStorage.setItem('savedRooms', JSON.stringify(savedRooms));
+        }
+      }
+      return newMessages;
+    });
   };
 
   const handleReceiveMessage = (event: MessageEvent, peerId: string, peerName: string) => {
     try {
       const msg = JSON.parse(event.data);
       if (msg.type === 'chat') {
-        // Enforce positive connection state internally if we received data
         updatePeerStatus(peerId, peerName, true);
-        setMessages((prev) => [...prev, msg.data]);
+        persistMessage(msg.data);
       }
     } catch (e) {
       console.warn("Received non-JSON data from data channel", event.data);
     }
   };
 
+  const flushPendingCandidates = async (peerId: string, pc: RTCPeerConnection) => {
+    if (pendingCandidates.current[peerId] && pendingCandidates.current[peerId].length > 0) {
+      for (const candidate of pendingCandidates.current[peerId]) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.error('Error adding pending ice candidate', e);
+        }
+      }
+      pendingCandidates.current[peerId] = [];
+    }
+  };
+
   const createPeerConnection = (peerId: string, peerName: string, isInitiator: boolean) => {
-    // If connection exists, close it first for clean retry
     if (pcRef.current[peerId]) {
       pcRef.current[peerId].close();
     }
 
     const pc = new RTCPeerConnection(ICE_SERVERS);
     pcRef.current[peerId] = pc;
-    updatePeerStatus(peerId, peerName, false); // Add to UI as "connecting"
+    isRemoteDescSet.current[peerId] = false;
+    pendingCandidates.current[peerId] = [];
+
+    updatePeerStatus(peerId, peerName, false);
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -127,7 +185,6 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
 
     ws.onopen = () => {
       console.log('Connected to signaling server');
-      // Announce arrival with deviceId
       sendSignaling({ type: 'join', senderId: deviceId, senderName: displayName });
     };
 
@@ -135,7 +192,6 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
       const data = JSON.parse(event.data);
 
       if (data.type === 'join' && data.senderId !== deviceId) {
-        // Someone joined, we are the initiator since we were here first
         const pc = createPeerConnection(data.senderId, data.senderName, true);
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -149,14 +205,17 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
         });
       }
 
-      // Ignore loops targeted for another browser
       if (data.targetId && data.targetId !== deviceId) return;
 
       if (data.type === 'offer') {
         const pc = createPeerConnection(data.senderId, data.senderName, false);
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        isRemoteDescSet.current[data.senderId] = true;
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
+
+        await flushPendingCandidates(data.senderId, pc);
 
         sendSignaling({
           type: 'answer',
@@ -171,23 +230,32 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
         const pc = pcRef.current[data.senderId];
         if (pc) {
           await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          isRemoteDescSet.current[data.senderId] = true;
+          await flushPendingCandidates(data.senderId, pc);
         }
       }
 
       if (data.type === 'candidate') {
         const pc = pcRef.current[data.senderId];
         if (pc) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-          } catch (e) {
-            console.error('Error adding received ice candidate', e);
+          if (isRemoteDescSet.current[data.senderId]) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            } catch (e) {
+              console.error('Error adding received ice candidate', e);
+            }
+          } else {
+            // Queue pending candidates until remote description is set
+            if (!pendingCandidates.current[data.senderId]) {
+              pendingCandidates.current[data.senderId] = [];
+            }
+            pendingCandidates.current[data.senderId].push(data.candidate);
           }
         }
       }
 
       if (data.type === 'peer_left') {
-        // Since backend doesn't know WHO left yet, we just broadcast
-        // We handle this more safely via ICE connection state changes
+        // We handle dropouts mostly via ICE states, but a dedicated message helps cleanup
       }
     };
 
@@ -216,7 +284,7 @@ export function useWebRTC(roomId: string, deviceId: string, displayName: string)
       timestamp: new Date().toISOString()
     };
 
-    setMessages(prev => [...prev, msgData]);
+    persistMessage(msgData);
 
     Object.values(channelRef.current).forEach(channel => {
       if (channel.readyState === 'open') {
