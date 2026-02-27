@@ -16,10 +16,38 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Voxs — P2P Chat & File Share",
-  description: "Zero-install, anonymous peer-to-peer chat and file sharing over local Wi-Fi. No cloud. No accounts.",
+  description: "Zero-install, anonymous peer-to-peer chat and file sharing over local Wi-Fi. No cloud. No accounts. Just connect.",
   keywords: ["local chat", "p2p", "file sharing", "webrtc", "offline", "mesh network"],
   authors: [{ name: "Voxs" }],
   manifest: "/manifest.json",
+
+  // ----- Open Graph (Facebook, WhatsApp, LinkedIn, iMessage, Slack…) -----
+  openGraph: {
+    title: "Voxs — Local P2P Chat & File Share",
+    description: "Zero-install. No accounts. No cloud. Chat and share files with anyone on your local network instantly.",
+    url: "https://voxs.vercel.app",
+    siteName: "Voxs",
+    type: "website",
+    locale: "en_US",
+    images: [
+      {
+        url: "/og-image.png",
+        width: 1200,
+        height: 630,
+        alt: "Voxs — Local P2P Chat & File Share",
+      },
+    ],
+  },
+
+  // ----- Twitter / X Card -----
+  twitter: {
+    card: "summary_large_image",
+    title: "Voxs — Local P2P Chat & File Share",
+    description: "Zero-install. No accounts. No cloud. Chat and share files with anyone on your local network instantly.",
+    images: ["/og-image.png"],
+  },
+
+  // ----- Apple PWA -----
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
@@ -27,12 +55,8 @@ export const metadata: Metadata = {
     startupImage: "/icon-512.png",
   },
   formatDetection: { telephone: false },
-  openGraph: {
-    title: "Voxs — P2P Chat & File Share",
-    description: "Zero-install local mesh chat. No accounts required.",
-    type: "website",
-  },
 };
+
 
 export const viewport: Viewport = {
   themeColor: [
